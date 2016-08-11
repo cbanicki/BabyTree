@@ -1,0 +1,394 @@
+---
+title: "<center>Baby Names</center>"
+output:
+  html_document:
+    keep_md: yes
+  pdf_document: default
+  word_document: default
+---
+<center><h3>**Prediction of US Baby Name Popularity**<h3></center>
+<center> <h4>*CB*</h4> </center>
+<center> <h5>August 11, 2016</h5> </center>
+ 
+### Overview
+
+
+*** 
+
+```{r global_options, include=FALSE, warning=FALSE,message=FALSE}
+knitr::knit_hooks$set(inline = function(x) { if(!is.numeric(x)){ x }else{ prettyNum(round(x,2), big.mark=",") } })
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/')
+options(digits = 3)
+
+```
+
+
+### Reading the data
+
+
+```{r chunk1, echo=FALSE, warning=FALSE,message=FALSE}
+    
+
+############################################################################################################################
+#Reading the data
+############################################################################################################################
+
+  #setwd("C://Users//cbanicki//Documents//GitHub//BabyTree")
+
+    tryCatch(
+
+      {
+        #Check whether you have already dowloaded the data into the working director, and if not, download and unzip it 
+
+        message("Checking local drive for data file. If it's not there then trying URL for new file.")
+
+        if (!file.exists("NationalNames.csv")) {
+
+          fileURL <- "https://www.kaggle.com/kaggle/us-baby-names/downloads/NationalNames.csv.zip"
+
+          fileName <- "NationalNames.csv.zip"
+
+          download.file(fileURL, fileName, mode = "wb")
+
+          dateDownloaded <- date()
+
+          unzip(fileName, files = NULL, list = FALSE, overwrite = TRUE,
+                junkpaths = FALSE, exdir = ".", unzip = "internal",
+                setTimes = FALSE)
+        }
+
+      },
+      error=function(cond) {
+        message(paste("Error getting data:", fileURL))
+        message("Original Error Message:")
+        message(cond)
+        # Return NA
+        stop("Check connection and try again.")
+        return(NA)
+      },
+      warning=function(cond) {
+        message(paste("Warning getting data", fileURL))
+        message("Original warning message:")
+        message(cond)
+      },
+
+      finally={
+
+
+      ## Read data
+      babyNames <- read.csv("NationalNames.csv", header = TRUE,na.strings = c("NA"))
+
+
+      }
+    )
+
+ 
+```
+
+
+
+*** 
+
+#### Metadata Descriptions for Dimensions in the Training Data
+
+The dimension found in the data are described in the table, below.
+
+```{r kable, echo=FALSE, warning=FALSE,message=FALSE}
+
+library(knitr)
+library(datasets)
+library(dplyr) 
+library(wordcloud)
+library(ggplot2)
+
+
+Desc <- c("Row Number","Name of Baby","Birth Year","Gender of Baby", "Babies born that Year")
+
+FieldNames <- c(names(babyNames))
+
+Field_name <- "Field Name"
+
+Desc_name <- "Field Description"
+
+df <- data.frame(FieldNames,Desc)
+
+names(df) <- c(Field_name,Desc_name )
+
+kable(df, digits=2)
+
+```
+
+
+####Preprocess the data
+
+
+
+####Create Data Partition
+
+
+
+
+```{r chunk2, echo=FALSE, warning=FALSE,message=FALSE}  
+
+############################################################################################################################
+#Preprocessing
+############################################################################################################################
+
+library(caret)
+
+#Remove the first column as it is not used in this analysis
+babyNames[1] <- list(NULL) 
+# babyNames[3] <- list(NULL) 
+
+
+#Take the top names of all time
+  dataTrim <- 
+    babyNames %>%
+    group_by(Name,Year,Gender) %>%
+    summarize(POPULARITY = sum(Count)) %>%
+    filter(POPULARITY >= 5000)
+
+  dataTrim$Name <- tolower(dataTrim$Name)
+
+#add the tertile to popularity (cut into thirds)
+dataTrim <- within(dataTrim, quartile <- as.integer(cut(POPULARITY, quantile(POPULARITY, probs=0:3/3), include.lowest=TRUE)))
+
+FirstL <-  as.data.frame(substr(dataTrim$Name, 1, 1))
+ 
+require(stringr)
+LastL <- as.data.frame(str_sub(dataTrim$Name, start= -1))
+
+dataTrim<- cbind(as.data.frame(dataTrim),FirstL,LastL)
+
+FieldNames <- c("FirstL","LastL")
+
+names(dataTrim)[6:7] <- FieldNames
+
+#Remove Name and POPULARITY since they won't be used in the training model
+
+#Create the data partitions for training and validation based on the orginal training data set
+inTrain <- createDataPartition(y=dataTrim$quartile,
+                               p=0.60, list=FALSE)
+
+trainNew <- dataTrim[inTrain,]
+valNew <- dataTrim[-inTrain,]
+
+#Create the data partitions for testing set (ie. create a testing set)
+inTrain <- createDataPartition(y=valNew$quartile,
+                               p=0.70, list=FALSE)
+
+valNew <- valNew[inTrain,]
+testNew <- valNew[-inTrain,]
+
+#Remove Popularity and Name
+trainNew[4] <- list(NULL) 
+trainNew[1] <- list(NULL) 
+
+
+
+    
+```
+
+
+
+### Principle Component Analysis
+
+
+```{r chunk3, echo=FALSE, warning=FALSE,message=FALSE}    
+  
+
+###################################################################################################################
+#Identify Principle Components
+###################################################################################################################
+
+#Estimate Principle Components (PCA) based on training data, as well as centering/scaling the data
+# prComp <- preProcess(trainNew[,1:ncol(trainNew)-1],method="pca", thresh = 0.99)
+# # 
+# #Calculate Principle Compoent values for training data
+# trainPC <- predict(prComp,trainNew[,1:ncol(trainNew)-1])
+# 
+# #Calculate Principle Component values for validate data, based on training PCA's
+# validatePC <- predict(prComp,valNew[,1:ncol(valNew)-1])
+# 
+# #Calculate Principle Component values for test data, based on training PCA's
+# testPC <- predict(prComp,testing[,1:ncol(testing)-1])
+
+    
+```
+
+
+###Random Forest Prediction Model
+
+Random Forest model was chosen for it's accuracy and ease of use in classification predictions.  In this model, there were 4 folds created and used in a cross-validation method.  
+
+```{r chunk4, echo=FALSE, warning=FALSE,message=FALSE} 
+
+
+###################################################################################################################
+#Create Random Forest model 
+###################################################################################################################
+
+#Create Random Forest Model with Cross Validation method with 4 folds.
+#Normally use something like (method="repeatedcv", number=10, repeats=3) for repeated
+#But it takes a long time  to process and doesn't improve accuracy that much for this model
+
+ #Remove Name and POPULARITY since they won't be used in the training model??
+rf_default <- train(trainNew$quartile ~ ., method = "rf", data = trainNew, trControl = trainControl(method = "CV", number = 4), importance = T)
+
+
+rf_default
+
+#Predict values in validation data based on Random Forest Model Created
+predVal <- predict(rf_default,valNew)
+
+#Show confusion matrix for the predictions to check accuracy and error rates
+predValConf <- confusionMatrix(valNew$quartile,round(predVal))
+
+predValConf$table
+
+#67% accuracy predicting the correct 
+confusionMatrix(valNew$quartile,round(predVal))
+
+
+```
+
+
+
+```{r chunk5, echo=FALSE, warning=FALSE,message=FALSE}  
+
+###################################################################################################################
+#Final Prediction
+###################################################################################################################
+ 
+predTestFinal <- predict(rf_default,testNew) 
+
+predTestFinal
+
+    
+  
+```
+      
+
+
+###Executive Summary
+
+
+
+
+## Appendix
+
+
+```{r chunk6, echo=FALSE, warning=FALSE,message=FALSE}
+
+
+
+```
+
+
+```{r chunk7, echo=FALSE, warning=FALSE,message=FALSE}
+
+
+
+```
+
+```{r chunk8, echo=FALSE, warning=FALSE,message=FALSE}    
+  
+
+```
+
+```{r chunk9, echo=FALSE, warning=FALSE,message=FALSE}  
+
+
+  
+```
+
+
+```{r chunk10, echo=FALSE, warning=FALSE,message=FALSE}  
+
+
+```
+
+```{r chunk11, echo=FALSE, warning=FALSE,message=FALSE}  
+
+
+```
+
+
+### Addenedum
+####R Code 
+
+```{r ref.label="chunk1", eval=FALSE}
+
+    
+```
+
+
+```{r ref.label="chunk2", eval=FALSE}
+
+
+
+    
+```
+  
+  
+  
+
+```{r ref.label="chunk3", eval=FALSE}
+
+    
+```
+
+
+```{r ref.label="chunk4", eval=FALSE}
+
+
+
+    
+```
+  
+  
+  
+
+```{r ref.label="chunk5", eval=FALSE}
+
+    
+```
+
+
+
+```{r ref.label="chunk6", eval=FALSE}
+
+    
+```
+
+
+```{r ref.label="chunk7", eval=FALSE}
+
+    
+```
+
+
+```{r ref.label="chunk8", eval=FALSE}
+
+    
+```
+
+
+```{r ref.label="chunk9", eval=FALSE}  
+
+    
+```
+
+
+
+```{r ref.label="chunk10", eval=FALSE}  
+
+    
+```
+
+
+```{r ref.label="chunk11", eval=FALSE}  
+
+    
+```
+
